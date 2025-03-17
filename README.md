@@ -1,7 +1,7 @@
 
 
 # Class-Incremental Learning with CLIP: Adaptive Representation Adjustment and Parameter Fusion (ECCV24)
-This is the official code for our paper: <a href='https://arxiv.org/pdf/2407.14143'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a>
+This is the jittor implementation for our paper: <a href='https://arxiv.org/pdf/2407.14143'><img src='https://img.shields.io/badge/Paper-Arxiv-red'></a>
 
 ## Getting Started
 
