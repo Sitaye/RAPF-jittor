@@ -1,14 +1,33 @@
 import warnings
 from copy import copy
-from typing import Callable, List, Union
+from typing import Callable, List, Union, Tuple
 
 import numpy as np
 
-from continuum.datasets import _ContinuumDataset
-from continuum.scenarios import _BaseScenario
+# from continuum.datasets import _ContinuumDataset
+# from continuum.scenarios import _BaseScenario
+from jittor.dataset import Dataset
+from jittor.transform import Compose
 
 
-class ClassIncremental(_BaseScenario):
+class TaskSet(Dataset):
+
+    def __init__(self, x, y, t, trsf=None, data_indexes=None):
+        super().__init__()
+        self.x, self.y, self.t = x, y, t
+        self.trsf = trsf
+        self.data_indexes = data_indexes
+        self.set_attrs(total_len=len(x))
+
+    def __getitem__(self, index):
+        x, y, t = self.x[index], self.y[index], self.t[index]
+        if self.trsf:
+            x = self.trsf(x)
+        return x, y, t
+
+
+# class ClassIncremental(_BaseScenario):
+class ClassIncremental:
     """Continual Loader, generating datasets for the consecutive tasks.
 
     Scenario: Each new tasks bring new classes only
@@ -29,7 +48,8 @@ class ClassIncremental(_BaseScenario):
 
     def __init__(
         self,
-        cl_dataset: _ContinuumDataset,
+        # cl_dataset: _ContinuumDataset,
+        cl_dataset: Dataset,
         nb_tasks: int = 0,
         increment: Union[List[int], int] = 0,
         initial_increment: int = 0,
@@ -41,9 +61,67 @@ class ClassIncremental(_BaseScenario):
         self.increment = increment
         self.initial_increment = initial_increment
         self.class_order = class_order
+        self.transformations = transformations
 
         self._nb_tasks = self._setup(nb_tasks)
-        super().__init__(cl_dataset=cl_dataset, nb_tasks=self._nb_tasks, transformations=transformations)
+        # super().__init__(cl_dataset=cl_dataset, nb_tasks=self._nb_tasks, transformations=transformations)
+        self._counter = 0
+
+        if self.transformations is not None and isinstance(self.transformations[0], list):
+            # We have list of list of callable, where each sublist is dedicated to
+            # a task.
+            if len(self.transformations) != self._nb_tasks:
+                raise ValueError(
+                    f"When using different transformations per task, there must be as as much transformations"
+                    f" ({len(self.transformations)}) than there are tasks ({self.nb_tasks})"
+                    f", which is not currently the case."
+                )
+            self.trsf = [Compose(trsf) for trsf in self.transformations]
+        else:
+            self.trsf = Compose(self.transformations)
+
+    def __len__(self) -> int:
+        """Returns the number of tasks.
+
+        :return: Number of tasks.
+        """
+        return self._nb_tasks
+
+    def __iter__(self):
+        """Used for iterating through all tasks with the CLLoader in a for loop."""
+        self._counter = 0
+        return self
+
+    def __next__(self) -> TaskSet:
+        """An iteration/task in the for loop."""
+        if self._counter >= len(self):
+            raise StopIteration
+        task = self[self._counter]
+        self._counter += 1
+        return task
+
+    def __getitem__(self, task_index: Union[int, slice]):
+        """Returns a task by its unique index.
+
+        :param task_index: The unique index of a task. As for List, you can use
+                           indexing between [0, len], negative indexing, or
+                           even slices.
+        :return: A train Jittor's Datasets.
+        """
+        if isinstance(task_index, slice) and isinstance(self.trsf, list):
+            raise ValueError(
+                f"You cannot select multiple task ({task_index}) when you have a "
+                "different set of transformations per task"
+            )
+
+        x, y, t, _, data_indexes = self._select_data_by_task(task_index)
+
+        return TaskSet(
+            x, y, t,
+            trsf=self.trsf[task_index] if isinstance(self.trsf, list) else self.trsf,
+            data_indexes=data_indexes
+        )
+
 
     def _setup(self, nb_tasks: int) -> int:
         x, y, _ = self.cl_dataset.get_data()
@@ -111,6 +189,60 @@ class ClassIncremental(_BaseScenario):
 
         return len(np.unique(task_ids))
 
+    def _select_data_by_task(
+            self,
+            task_index: Union[int, slice, np.ndarray]
+    ) -> Union[np.ndarray, np.ndarray, np.ndarray, Union[int, List[int]]]:
+        """Selects a subset of the whole data for a given task.
+
+        This class returns the "task_index" in addition of the x, y, t data.
+        This task index is either an integer or a list of integer when the user
+        used a slice. We need this variable when in segmentation to disentangle
+        samples with multiple task ids.
+
+        :param task_index: The unique index of a task. As for List, you can use
+                           indexing between [0, len], negative indexing, or
+                           even slices.
+        :return: A tuple of numpy array being resp. (1) the data, (2) the targets,
+                 (3) task ids, and (4) the actual task required by the user.
+        """
+
+        # conversion of task_index into a list
+
+        if isinstance(task_index, slice):
+            start = task_index.start if task_index.start is not None else 0
+            stop = task_index.stop if task_index.stop is not None else len(self)
+            step = task_index.step if task_index.step is not None else 1
+            task_index = list(range(start, stop, step))
+            if len(task_index) == 0:
+                raise ValueError(f"Invalid slicing resulting in no data (start={start}, end={stop}, step={step}).")
+
+        if isinstance(task_index, np.ndarray):
+            task_index = list(task_index)
+
+        x, y, t = self.dataset  # type: ignore
+
+        if isinstance(task_index, list):
+            task_ids_to_get = [
+                _handle_negative_indexes(idx, len(self)) for idx in task_index
+            ]
+            if len(t.shape) == 2:
+                data_indexes = np.unique(np.where(t[:, task_ids_to_get] == 1)[0])
+            else:
+                data_indexes = np.where(np.isin(t, task_ids_to_get))[0]
+        else:
+            task_id_to_get = _handle_negative_indexes(task_index, len(self))
+            if len(t.shape) == 2:
+                data_indexes = np.where(t[:, task_id_to_get] == 1)[0]
+            else:
+                data_indexes = np.where(t == task_id_to_get)[0]
+
+        selected_x = x[data_indexes]
+        selected_y = y[data_indexes]
+        selected_t = t[data_indexes]
+
+        return selected_x, selected_y, selected_t, task_index, data_indexes
+    
     def _set_task_labels(self, y: np.ndarray) -> np.ndarray:
         """For each data point, defines a task associated with the data.
 
@@ -161,7 +293,7 @@ class ClassIncremental(_BaseScenario):
             raise TypeError(f"Invalid increment={increment}, it must be an int > 0.")
 
         return increments
-
+    
     def get_original_targets(self, targets: np.ndarray) -> np.ndarray:
         """Returns the original targets not changed by the custom class order.
 
@@ -190,3 +322,8 @@ class ClassIncremental(_BaseScenario):
             selected_y = self.cl_dataset.class_remapping(selected_y)
 
         return selected_x, selected_y
+
+def _handle_negative_indexes(index: int, total_len: int) -> int:
+    if index < 0:
+        index = index % total_len
+    return index
