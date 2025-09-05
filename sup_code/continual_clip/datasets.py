@@ -11,9 +11,10 @@ from typing import Tuple, Union
 # from continuum.datasets import (
 #     CIFAR100, ImageNet100, TinyImageNet200, ImageFolderDataset, Core50
 # )
-from jittor.dataset import CIFAR100, ImageFolder
 from .class_incremental import ClassIncremental
+from .base import ImageFolderDataset, _ContinuumDataset, TaskType
 from .utils import get_dataset_class_names, get_workdir
+from .cifar100 import CIFAR100
 
 # from torchvision import transforms
 import jittor.transform as transforms
@@ -23,17 +24,6 @@ from PIL import Image
 from jittor_utils import LOG
 
 
-class ImageFolderDataset(ImageFolder):
-    def get_data(self) -> Tuple[np.ndarray, np.ndarray, Union[None, np.ndarray]]:
-        x = np.empty(len(self.imgs), dtype="S255")
-        y = np.empty(len(self.imgs), dtype=np.int16)
-
-        for i, (path, target) in enumerate(self.imgs):
-            x[i] = path
-            y[i] = target
-        
-        return x, y, None
-    
 
 class MyImageFolder(Dataset):
     """
@@ -101,8 +91,7 @@ class MyImageFolder(Dataset):
             return img, self.imgs[k][1], self.taskid[k]
 
 
-# class ImageNet100(_ContinuumDataset):
-class ImageNet100(Dataset):
+class ImageNet100(_ContinuumDataset):
     """Subset of ImageNet1000 made of only 100 classes.
 
     You must download the ImageNet1000 dataset then provide the images subset.
@@ -116,33 +105,14 @@ class ImageNet100(Dataset):
     test_subset_url = "https://github.com/Continvvm/continuum/releases/download/v0.1/val_100.txt"
 
     def __init__(
-            # self, *args, data_subset: Union[Tuple[np.array, np.array], str, None] = None, **kwargs
-            self,
-            root: str,
-            train: bool = True,
-            data_subset:  str = None,
-            transform = None,
+            self, *args, data_subset: Union[Tuple[np.array, np.array], str, None] = None, **kwargs
     ):
-        # self.data_subset = data_subset
-        # super().__init__(*args, **kwargs)
-        super().__init__()
-        self.transform = transform if transform is not None else self.transformations
-        
-        x, y = [], []
-        with open(data_subset, "r") as f:
-            for line in f:
-                split_line = line.split(" ")
-                path = split_line[0].strip()
-                x.append(os.path.join(root, path))
-                y.append(int(split_line[1].strip()))
-        
-        self.imgs = list(zip(x, y))
-        self.classes = sorted(list(set(y)))
-        self.set_attrs(total_len=len(self.imgs))
+        self.data_subset = data_subset
+        super().__init__(*args, **kwargs)
 
-    # @property
-    # def data_type(self) -> TaskType:
-    #     return TaskType.IMAGE_PATH
+    @property
+    def data_type(self) -> TaskType:
+        return TaskType.IMAGE_PATH
 
     @property
     def transformations(self):
@@ -179,29 +149,27 @@ class ImageNet100(Dataset):
     #             print("Done!")
 
     def get_data(self) -> Tuple[np.ndarray, np.ndarray, Union[np.ndarray, None]]:
-        # data = self._parse_subset(self.data_subset, train=self.train)  # type: ignore
-        # return (*data, None)
-        paths, labels = zip(*self.imgs)
-        return np.array(paths), np.array(labels), None
+        data = self._parse_subset(self.data_subset, train=self.train)  # type: ignore
+        return (*data, None)
 
-    # def _parse_subset(
-    #         self,
-    #         subset: Union[Tuple[np.array, np.array], str, None],
-    #         train: bool = True
-    # ) -> Tuple[np.array, np.array]:
-    #     if isinstance(subset, str):
-    #         x, y = [], []
+    def _parse_subset(
+            self,
+            subset: Union[Tuple[np.array, np.array], str, None],
+            train: bool = True
+    ) -> Tuple[np.array, np.array]:
+        if isinstance(subset, str):
+            x, y = [], []
 
-    #         with open(subset, "r") as f:
-    #             for line in f:
-    #                 split_line = line.split(" ")
-    #                 path = split_line[0].strip()
-    #                 x.append(os.path.join(self.data_path, path))
-    #                 y.append(int(split_line[1].strip()))
-    #         x = np.array(x)
-    #         y = np.array(y)
-    #         return x, y
-    #     return subset  # type: ignore
+            with open(subset, "r") as f:
+                for line in f:
+                    split_line = line.split(" ")
+                    path = split_line[0].strip()
+                    x.append(os.path.join(self.data_path, path))
+                    y.append(int(split_line[1].strip()))
+            x = np.array(x)
+            y = np.array(y)
+            return x, y
+        return subset  # type: ignore
 
 class ImageNet1000(ImageFolderDataset):
     """Continuum dataset for datasets with tree-like structure.
@@ -214,18 +182,16 @@ class ImageNet1000(ImageFolderDataset):
             self,
             data_path: str,
             train: bool = True,
-            # download: bool = False,
+            download: bool = False,
     ):
-        data_path = os.path.join(data_path, "train" if train else "val")
-        # super().__init__(data_path=data_path, train=train, download=download)
-        super().__init__(root=data_path)
+        super().__init__(data_path=data_path, train=train, download=download)
 
-    # def get_data(self):
-        # if self.train:
-        #     self.data_path = os.path.join(self.data_path, "train")
-        # else:
-        #     self.data_path = os.path.join(self.data_path, "val")
-        # return super().get_data()
+    def get_data(self):
+        if self.train:
+            self.data_path = os.path.join(self.data_path, "train")
+        else:
+            self.data_path = os.path.join(self.data_path, "val")
+        return super().get_data()
 
 
 class ImageNet_R(ImageFolderDataset):
@@ -239,13 +205,9 @@ class ImageNet_R(ImageFolderDataset):
             self,
             data_path: str,
             train: bool = True,
-            # download: bool = False,
+            download: bool = False,
     ):
-        data_path = os.path.join(data_path, "train" if train else "val")
-        # super().__init__(data_path=data_path, train=train, download=download)
-        super().__init__(root=data_path)
-        self.transform=self.transformations
-        
+        super().__init__(data_path=data_path, train=train, download=download)
     @property
     def transformations(self):
         """Default transformations if nothing is provided to the scenario."""
@@ -258,24 +220,19 @@ class ImageNet_R(ImageFolderDataset):
         # ]
         ])
 
-    # def get_data(self):
-    #     if self.train:
-    #         self.data_path = os.path.join(self.data_path, "train")
-    #     else:
-    #         self.data_path = os.path.join(self.data_path, "test")
-    #     return super().get_data()
-
-
-class CIFAR100New(CIFAR100):
-    def get_data(self) -> Tuple[np.ndarray, np.ndarray, Union[None, np.ndarray]]:
-        return self.data, np.array(self.targets), None
+    def get_data(self):
+        if self.train:
+            self.data_path = os.path.join(self.data_path, "train")
+        else:
+            self.data_path = os.path.join(self.data_path, "test")
+        return super().get_data()
 
 
 def get_dataset(cfg, is_train, transforms=None):
     if cfg.dataset == "cifar100":
         # data_path = os.path.join(cfg.dataset_root, cfg.dataset)
         data_path = cfg.dataset_root
-        dataset = CIFAR100New(
+        dataset = CIFAR100(
             data_path=data_path, 
             download=True, 
             train=is_train, 

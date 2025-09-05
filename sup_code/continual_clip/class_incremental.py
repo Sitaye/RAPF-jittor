@@ -6,28 +6,10 @@ import numpy as np
 
 # from continuum.datasets import _ContinuumDataset
 # from continuum.scenarios import _BaseScenario
-from jittor.dataset import Dataset
 from jittor.transform import Compose
+from .base import _ContinuumDataset, TaskSet, _BaseScenario
 
-
-class TaskSet(Dataset):
-
-    def __init__(self, x, y, t, trsf=None, data_indexes=None):
-        super().__init__()
-        self.x, self.y, self.t = x, y, t
-        self.trsf = trsf
-        self.data_indexes = data_indexes
-        self.set_attrs(total_len=len(x))
-
-    def __getitem__(self, index):
-        x, y, t = self.x[index], self.y[index], self.t[index]
-        if self.trsf:
-            x = self.trsf(x)
-        return x, y, t
-
-
-# class ClassIncremental(_BaseScenario):
-class ClassIncremental:
+class ClassIncremental(_BaseScenario):
     """Continual Loader, generating datasets for the consecutive tasks.
 
     Scenario: Each new tasks bring new classes only
@@ -48,8 +30,7 @@ class ClassIncremental:
 
     def __init__(
         self,
-        # cl_dataset: _ContinuumDataset,
-        cl_dataset: Dataset,
+        cl_dataset: _ContinuumDataset,
         nb_tasks: int = 0,
         increment: Union[List[int], int] = 0,
         initial_increment: int = 0,
@@ -200,6 +181,26 @@ class ClassIncremental:
         used a slice. We need this variable when in segmentation to disentangle
         samples with multiple task ids.
 
+        if isinstance(task_index, list):
+            task_ids_to_get = [
+                _handle_negative_indexes(idx, len(self)) for idx in task_index
+            ]
+            if len(t.shape) == 2:
+                data_indexes = np.unique(np.where(t[:, task_ids_to_get] == 1)[0])
+            else:
+                data_indexes = np.where(np.isin(t, task_ids_to_get))[0]
+        else:
+            task_id_to_get = _handle_negative_indexes(task_index, len(self))
+            if len(t.shape) == 2:
+                data_indexes = np.where(t[:, task_id_to_get] == 1)[0]
+            else:
+                data_indexes = np.where(t == task_id_to_get)[0]
+
+        selected_x = x[data_indexes]
+        selected_y = y[data_indexes]
+        selected_t = t[data_indexes]
+
+        return selected_x, selected_y
         :param task_index: The unique index of a task. As for List, you can use
                            indexing between [0, len], negative indexing, or
                            even slices.
